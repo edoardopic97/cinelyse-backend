@@ -4,21 +4,50 @@ const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMG = "https://image.tmdb.org/t/p/w500";
 
+// In-memory rate limiter: 30 req/min per IP
+const hits = new Map();
+const WINDOW_MS = 60_000;
+const MAX_HITS = 30;
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = hits.get(ip);
+  if (!entry || now - entry.start > WINDOW_MS) {
+    hits.set(ip, { start: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > MAX_HITS;
+}
+
+// Cleanup stale entries every 5 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of hits) {
+    if (now - entry.start > WINDOW_MS) hits.delete(ip);
+  }
+}, 300_000);
+
 module.exports = async (req, res) => {
-  const { id } = req.query;
-  if (!id) {
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
+  if (isRateLimited(ip)) {
+    res.status(429).send("Too many requests");
+    return;
+  }
+
+  const { id, type } = req.query;
+  // Validate: must be numeric TMDB ID or tt+digits IMDB ID
+  if (!id || !/^(\d+|tt\d+)$/.test(id)) {
     res.status(400).send("Invalid movie ID");
     return;
   }
 
   let movie = null;
-  // id can be tmdb numeric id or imdb tt id
+  let mediaType = type === "tv" ? "tv" : "movie";
   try {
     let tmdbId = id;
-    let mediaType = "movie";
 
     if (id.startsWith("tt")) {
-      // Look up by IMDB ID
       const find = await axios.get(`${TMDB_BASE}/find/${id}`, {
         params: { api_key: TMDB_API_KEY, external_source: "imdb_id" },
       });
@@ -27,12 +56,28 @@ module.exports = async (req, res) => {
       if (movieResults.length) { tmdbId = movieResults[0].id; mediaType = "movie"; }
       else if (tvResults.length) { tmdbId = tvResults[0].id; mediaType = "tv"; }
       else { res.status(404).send("Movie not found"); return; }
+    } else if (mediaType === "movie") {
+      // Numeric ID without type hint — try movie first, fall back to TV
+      try {
+        const r = await axios.get(`${TMDB_BASE}/movie/${tmdbId}`, {
+          params: { api_key: TMDB_API_KEY },
+        });
+        movie = r.data;
+      } catch {
+        const r = await axios.get(`${TMDB_BASE}/tv/${tmdbId}`, {
+          params: { api_key: TMDB_API_KEY },
+        });
+        movie = r.data;
+        mediaType = "tv";
+      }
     }
 
-    const r = await axios.get(`${TMDB_BASE}/${mediaType}/${tmdbId}`, {
-      params: { api_key: TMDB_API_KEY },
-    });
-    movie = r.data;
+    if (!movie) {
+      const r = await axios.get(`${TMDB_BASE}/${mediaType}/${tmdbId}`, {
+        params: { api_key: TMDB_API_KEY },
+      });
+      movie = r.data;
+    }
   } catch {}
 
   const title = movie?.title || movie?.name || "Movie";
@@ -45,7 +90,9 @@ module.exports = async (req, res) => {
   const deepLink = `cinelyse://movie/${id}`;
   const ogDesc = plot || `${genre}${year ? ` • ${year}` : ""}`;
 
-  const html = `<!DOCTYPE html>
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
+  res.status(200).send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
@@ -80,15 +127,12 @@ module.exports = async (req, res) => {
     ${plot ? `<p class="plot">${plot}</p>` : ""}
     <a class="open-btn" href="${deepLink}" id="openApp">Open in CINELYSE</a>
     <p class="store">Coming soon to the Play Store & App Store</p>
-    ${movie?.imdb_id ? `<a class="tmdb" href="https://www.themoviedb.org/${movie.title ? 'movie' : 'tv'}/${movie.id}" target="_blank">View on TMDB →</a>` : ""}
+    ${movie?.id ? `<a class="tmdb" href="https://www.themoviedb.org/${mediaType}/${movie.id}" target="_blank">View on TMDB →</a>` : ""}
     <div class="logo">CINELYSE</div>
   </div>
   <script>
     setTimeout(function(){ window.location.href="${deepLink}"; }, 100);
   </script>
 </body>
-</html>`;
-
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.status(200).send(html);
+</html>`);
 };
