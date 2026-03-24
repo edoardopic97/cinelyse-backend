@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/trpc/:path*", "destination": "/api/trpc/handler" },
+    { "source": "/movie/:id", "destination": "/api/movie/[id]" },
+    { "source": "/api/notify", "destination": "/api/notify/index" }
+  ]
+}
