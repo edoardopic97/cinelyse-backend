@@ -1,8 +1,10 @@
 const { findMoviesFromQuery, directTitleSearch } = require("../../lib/movieSearch");
 const { getCachedResults, setCachedResults } = require("../../lib/cache");
+const admin = require("firebase-admin");
 const { db } = require("../../lib/firebase");
 const { verifyAuth } = require("../../lib/auth");
 
+const FieldValue = admin.firestore.FieldValue;
 const MAX_DAILY_CREDITS = 5;
 const MAX_DAILY_TITLE_SEARCHES = 50;
 const UNLIMITED_UIDS = new Set([
@@ -10,7 +12,6 @@ const UNLIMITED_UIDS = new Set([
 ].flat());
 
 function localDateKey(tzOffset) {
-  // tzOffset = minutes ahead of UTC (e.g. UTC+5 = 300, UTC-4 = -240)
   const now = new Date();
   const local = new Date(now.getTime() + (tzOffset ?? 0) * 60000);
   return local.toISOString().slice(0, 10);
@@ -22,13 +23,16 @@ async function checkCredits(uid, tzOffset) {
 
   const today = localDateKey(tzOffset);
   const ref = db.collection("users").doc(uid).collection("credits").doc(today);
-  const snap = await ref.get();
-  const used = snap.exists ? snap.data().used || 0 : 0;
 
-  if (used >= MAX_DAILY_CREDITS) return { allowed: false, remaining: 0 };
+  const result = await db.runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    const used = snap.exists ? snap.data().used || 0 : 0;
+    if (used >= MAX_DAILY_CREDITS) return { allowed: false, remaining: 0 };
+    t.set(ref, { used: used + 1, updatedAt: new Date() }, { merge: true });
+    return { allowed: true, remaining: MAX_DAILY_CREDITS - used - 1 };
+  });
 
-  await ref.set({ used: used + 1, updatedAt: new Date() }, { merge: true });
-  return { allowed: true, remaining: MAX_DAILY_CREDITS - used - 1 };
+  return result;
 }
 
 async function checkTitleSearchLimit(uid, tzOffset) {
@@ -37,13 +41,16 @@ async function checkTitleSearchLimit(uid, tzOffset) {
 
   const today = localDateKey(tzOffset);
   const ref = db.collection("users").doc(uid).collection("titleSearches").doc(today);
-  const snap = await ref.get();
-  const used = snap.exists ? snap.data().used || 0 : 0;
 
-  if (used >= MAX_DAILY_TITLE_SEARCHES) return { allowed: false, remaining: 0 };
+  const result = await db.runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    const used = snap.exists ? snap.data().used || 0 : 0;
+    if (used >= MAX_DAILY_TITLE_SEARCHES) return { allowed: false, remaining: 0 };
+    t.set(ref, { used: used + 1, updatedAt: new Date() }, { merge: true });
+    return { allowed: true, remaining: MAX_DAILY_TITLE_SEARCHES - used - 1 };
+  });
 
-  await ref.set({ used: used + 1, updatedAt: new Date() }, { merge: true });
-  return { allowed: true, remaining: MAX_DAILY_TITLE_SEARCHES - used - 1 };
+  return result;
 }
 
 module.exports = async function handler(req, res) {
@@ -101,11 +108,10 @@ module.exports = async function handler(req, res) {
 
     if (!UNLIMITED_UIDS.has(uid)) {
       const userRef = db.collection("users").doc(uid);
+      await userRef.set({ totalSearches: FieldValue.increment(1), updatedAt: new Date() }, { merge: true });
+      // Read back for fan-out
       const userSnap = await userRef.get();
-      const current = userSnap.exists ? (userSnap.data().totalSearches || 0) : 0;
-      const newCount = current + 1;
-      await userRef.set({ totalSearches: newCount, updatedAt: new Date() }, { merge: true });
-      // Fan out to friends' denormalized docs
+      const newCount = userSnap.exists ? (userSnap.data().totalSearches || 0) : 0;
       const friendsSnap = await db.collection("users").doc(uid).collection("friends").get();
       if (!friendsSnap.empty) {
         const batch = db.batch();
