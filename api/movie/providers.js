@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
   if (!id) return res.status(400).json({ error: "Missing id" });
 
   const mt = type === "tv" ? "tv" : "movie";
-  const cc = (region || "US").toUpperCase();
+  const cc = (region || req.headers["x-vercel-ip-country"] || "US").toUpperCase();
 
   try {
     const r = await axios.get(`${TMDB_BASE}/${mt}/${id}/watch/providers`, {
@@ -29,7 +29,7 @@ module.exports = async (req, res) => {
     const seen = new Set();
     const providers = [];
 
-    for (const bucket of ["flatrate", "ads", "free", "rent", "buy"]) {
+    for (const bucket of ["flatrate", "flatrate_and_buy", "ads", "free", "rent", "buy"]) {
       for (const p of country[bucket] || []) {
         if (seen.has(p.provider_id)) continue;
         seen.add(p.provider_id);
@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
           id: p.provider_id,
           name: p.provider_name,
           logo: p.logo_path ? `${TMDB_IMG}${p.logo_path}` : "",
-          type: bucket,
+          type: bucket === "flatrate_and_buy" ? "flatrate" : bucket,
         });
       }
     }
