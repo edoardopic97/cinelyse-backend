@@ -5,7 +5,8 @@ const { db } = require("../../lib/firebase");
 const { verifyAuth } = require("../../lib/auth");
 
 const FieldValue = admin.firestore.FieldValue;
-const MAX_DAILY_CREDITS = 5;
+const MAX_DAILY_CREDITS = 3;
+const MAX_DAILY_CREDITS_PREMIUM = 15;
 const MAX_DAILY_TITLE_SEARCHES = 50;
 const UNLIMITED_UIDS = new Set([
   process.env.UNLIMITED_UIDS ? process.env.UNLIMITED_UIDS.split(",") : [],
@@ -21,15 +22,20 @@ async function checkCredits(uid, tzOffset) {
   if (!uid) return { allowed: false, remaining: 0 };
   if (UNLIMITED_UIDS.has(uid)) return { allowed: true, remaining: Infinity };
 
+  // Check premium status
+  const userSnap = await db.collection("users").doc(uid).get();
+  const isPremium = userSnap.exists && userSnap.data().premium === true;
+  const maxCredits = isPremium ? MAX_DAILY_CREDITS_PREMIUM : MAX_DAILY_CREDITS;
+
   const today = localDateKey(tzOffset);
   const ref = db.collection("users").doc(uid).collection("credits").doc(today);
 
   const result = await db.runTransaction(async (t) => {
     const snap = await t.get(ref);
     const used = snap.exists ? snap.data().used || 0 : 0;
-    if (used >= MAX_DAILY_CREDITS) return { allowed: false, remaining: 0 };
+    if (used >= maxCredits) return { allowed: false, remaining: 0 };
     t.set(ref, { used: used + 1, updatedAt: new Date() }, { merge: true });
-    return { allowed: true, remaining: MAX_DAILY_CREDITS - used - 1 };
+    return { allowed: true, remaining: maxCredits - used - 1 };
   });
 
   return result;

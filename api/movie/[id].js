@@ -87,7 +87,7 @@ module.exports = async (req, res) => {
   const genre = (movie?.genres || []).map(g => g.name).join(", ");
   const plot = movie?.overview || "";
   const runtime = movie?.runtime ? `${movie.runtime} min` : "";
-  const deepLink = `cinelyse://movie/${id}`;
+  const deepLink = `cinelyse://movie/${id}${mediaType === 'tv' ? '?type=tv' : ''}`;
   const ogDesc = plot || `${genre}${year ? ` • ${year}` : ""}`;
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -115,7 +115,7 @@ module.exports = async (req, res) => {
     .open-btn{display:inline-block;background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;font-size:16px;font-weight:700;padding:14px 32px;border-radius:12px;text-decoration:none;margin-bottom:12px;box-shadow:0 4px 20px rgba(200,40,40,0.4)}
     .store{color:rgba(255,255,255,0.35);font-size:13px;margin-top:8px}
     .logo{font-size:13px;color:rgba(255,255,255,0.25);margin-top:32px;letter-spacing:1px}
-    .tmdb{color:#01b4e4;text-decoration:none;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px;margin-top:12px}
+    .tmdb{color:#01b4e4;text-decoration:none;font-size:10px;font-weight:500;display:inline-flex;align-items:center;gap:3px;margin-top:10px;opacity:0.6}
   </style>
 </head>
 <body>
